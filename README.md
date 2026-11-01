@@ -1,4 +1,4 @@
-# Antigravity ChatGPT
+﻿# Antigravity ChatGPT
 
 Adds ChatGPT models to the native Google Antigravity agent chat, using the ChatGPT
 subscription you already pay for. No OpenAI API key, no per-token billing.
@@ -31,13 +31,23 @@ forwarded byte-for-byte.
 
 ```
 Antigravity agent
-      │  Gemini GenerateContent (+ tools)
-      ▼
+      â”‚  Gemini GenerateContent (+ tools)
+      â–¼
 127.0.0.1:57333  (this extension)
-      │  Gemini → Chat Completions → Responses
-      ▼
+      â”‚  Gemini â†’ Chat Completions â†’ Responses
+      â–¼
 chatgpt.com/backend-api/codex/responses   (ChatGPT Plus session)
 ```
+
+## Install
+
+Download `antigravity-chatgpt-0.1.0.vsix` from the [latest release](https://github.com/Galantryas/antigravity-chatgpt/releases) and install it:
+
+```bash
+code --install-extension antigravity-chatgpt-0.1.0.vsix
+```
+
+Or build it yourself with `npm install && npm run package`.
 
 ## Setup
 
@@ -76,3 +86,4 @@ endpoint.
 - `Enable ChatGPT routing` / `Disable ChatGPT routing`
 - `Restart proxy and re-attach language server`
 - `Show log`
+
