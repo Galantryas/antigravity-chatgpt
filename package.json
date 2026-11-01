@@ -1,0 +1,184 @@
+{
+  "name": "antigravity-chatgpt",
+  "displayName": "Antigravity ChatGPT",
+  "description": "Adds ChatGPT models (ChatGPT Plus subscription) to the native Antigravity agent chat picker.",
+  "version": "0.1.0",
+  "publisher": "galantryas",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "antigravityChatGPT.openSettings",
+        "title": "Open settings panel (account & models)",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.signIn",
+        "title": "Sign in with ChatGPT",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.signOut",
+        "title": "Sign out",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.checkAuth",
+        "title": "Check sign-in",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.addModel",
+        "title": "Add ChatGPT models to the picker",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.removeModel",
+        "title": "Remove ChatGPT models",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.listModels",
+        "title": "List configured models",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.enable",
+        "title": "Enable ChatGPT routing",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.disable",
+        "title": "Disable ChatGPT routing (restore native)",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.restart",
+        "title": "Restart proxy and re-attach language server",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.showLog",
+        "title": "Show log",
+        "category": "Antigravity ChatGPT"
+      },
+      {
+        "command": "antigravityChatGPT.reloadWindow",
+        "title": "Reload window",
+        "category": "Antigravity ChatGPT"
+      }
+    ],
+    "configuration": {
+      "title": "Antigravity ChatGPT",
+      "properties": {
+        "antigravityChatGPT.port": {
+          "type": "number",
+          "default": 57333,
+          "description": "Loopback port for the local Cloud Code proxy."
+        },
+        "antigravityChatGPT.upstream": {
+          "type": "string",
+          "default": "https://daily-cloudcode-pa.googleapis.com",
+          "description": "Cloud Code endpoint native models are forwarded to."
+        },
+        "antigravityChatGPT.autoEnable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Re-attach the proxy automatically after a window reload when routing was enabled."
+        },
+        "antigravityChatGPT.recordCaptures": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write request/response bodies for every proxied call to the extension's storage folder (debugging aid, contains prompts)."
+        },
+        "antigravityChatGPT.models": {
+          "type": "array",
+          "default": [
+            {
+              "alias": "gpt-6-1-sol",
+              "displayName": "GPT-6.1-Sol (ChatGPT)",
+              "modelId": "gpt-6.1-sol",
+              "contextLength": 500000,
+              "maxOutputTokens": 32000,
+              "vision": true,
+              "reasoning": true
+            },
+            {
+              "alias": "gpt-6-luna",
+              "displayName": "GPT-6-Luna (ChatGPT)",
+              "modelId": "gpt-6-luna",
+              "contextLength": 272000,
+              "maxOutputTokens": 32000,
+              "vision": true,
+              "reasoning": true
+            }
+          ],
+          "description": "ChatGPT models injected into the Antigravity picker. Managed by the \"Add ChatGPT models\" command.",
+          "items": {
+            "type": "object",
+            "required": [
+              "alias",
+              "displayName",
+              "modelId"
+            ],
+            "properties": {
+              "alias": {
+                "type": "string",
+                "description": "Stable key; the picker id becomes gpt/<alias>."
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "modelId": {
+                "type": "string",
+                "description": "ChatGPT model id, e.g. gpt-6.1-sol."
+              },
+              "contextLength": {
+                "type": "number"
+              },
+              "maxOutputTokens": {
+                "type": "number"
+              },
+              "vision": {
+                "type": "boolean"
+              },
+              "reasoning": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "antigravityChatGPT.identityPoolStart": {
+          "type": "number",
+          "default": 1600,
+          "description": "Highest MODEL_PLACEHOLDER_M### value used when allocating native identities for injected models (allocated downwards)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/build.mjs && node --test \"out/test/*.mjs\"",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

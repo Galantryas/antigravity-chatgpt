@@ -1,0 +1,17 @@
+.vscode/**
+.vscode-test/**
+src/**
+test/**
+tools/**
+captures/**
+out/**
+out-test/**
+node_modules/**
+dist/**/*.map
+esbuild.mjs
+test/build.mjs
+tsconfig.json
+package-lock.json
+**/*.test.ts
+PLAN.md
+.gitignore
