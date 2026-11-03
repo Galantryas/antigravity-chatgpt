@@ -41,10 +41,10 @@ chatgpt.com/backend-api/codex/responses   (ChatGPT Plus session)
 
 ## Install
 
-Download `antigravity-chatgpt-0.1.0.vsix` from the [latest release](https://github.com/Galantryas/antigravity-chatgpt/releases) and install it:
+Download `antigravity-chatgpt-0.1.1.vsix` from the [latest release](https://github.com/Galantryas/antigravity-chatgpt/releases) and install it:
 
 ```bash
-code --install-extension antigravity-chatgpt-0.1.0.vsix
+code --install-extension antigravity-chatgpt-0.1.1.vsix
 ```
 
 Or build it yourself with `npm install && npm run package`.

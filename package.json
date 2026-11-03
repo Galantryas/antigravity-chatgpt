@@ -2,7 +2,7 @@
   "name": "antigravity-chatgpt",
   "displayName": "Antigravity ChatGPT",
   "description": "Adds ChatGPT models (ChatGPT Plus subscription) to the native Antigravity agent chat picker.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "galantryas",
   "license": "MIT",
   "engines": {

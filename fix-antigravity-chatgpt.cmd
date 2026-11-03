@@ -21,18 +21,20 @@ if exist "%AGY%" (
   echo Remove the extension from the Extensions view instead.
 )
 
-if exist "%~dp0antigravity-chatgpt-0.1.0.vsix" (
+set "VSIX="
+for %%f in ("%~dp0antigravity-chatgpt-*.vsix") do set "VSIX=%%~ff"
+if defined VSIX (
   if exist "%AGY%" (
-    echo Installing the fixed build...
-    call "%AGY%" --install-extension "%~dp0antigravity-chatgpt-0.1.0.vsix" --force
+    echo Installing %VSIX%...
+    call "%AGY%" --install-extension "%VSIX%" --force
   ) else (
     echo.
-    echo Install antigravity-chatgpt-0.1.0.vsix manually after Antigravity starts.
+    echo Install %VSIX% manually after Antigravity starts.
   )
 ) else (
   echo.
-  echo The fixed VSIX was not found next to this script.
-  echo Install antigravity-chatgpt-0.1.0.vsix manually after Antigravity starts.
+  echo No antigravity-chatgpt-*.vsix file was found next to this script.
+  echo Install the latest VSIX manually after Antigravity starts.
 )
 
 echo.
