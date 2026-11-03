@@ -30,7 +30,12 @@ export class SettingsPanel {
     );
     this.panel.webview.html = html();
     this.panel.onDidDispose(() => (this.panel = undefined));
-    this.panel.webview.onDidReceiveMessage((message) => void this.handle(message));
+    this.panel.webview.onDidReceiveMessage((message) => {
+      void this.handle(message).catch((error) => {
+        this.log.error('settings panel action failed', error);
+        this.post({ command: 'authResult', ok: false, message: (error as Error).message });
+      });
+    });
 
     await this.pushState();
     void this.loadCatalog();
@@ -115,7 +120,9 @@ export class SettingsPanel {
   }
 
   private post(message: unknown): void {
-    void this.panel?.webview.postMessage(message);
+    const sent = this.panel?.webview.postMessage(message);
+    // The webview may have been disposed between the click and this post.
+    if (sent) void sent.then(undefined, () => undefined);
   }
 }
 

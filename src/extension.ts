@@ -20,6 +20,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const config = () => vscode.workspace.getConfiguration(CONFIG);
   const settings = new SettingsAdapter(context, log);
+  // A BOM left in settings.json makes Antigravity's own JSON.parse throw,
+  // which can break its sign-in/settings reads before this extension runs.
+  settings.normalize();
   const hub = new LanguageServerHub(log);
   const registry = new ModelRegistry(context);
   const client = new ChatGptClient();
@@ -124,7 +127,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     ...registerModelCommands({ context, client, registry, log, onChanged: render }),
 
-    vscode.commands.registerCommand('antigravityChatGPT.openSettings', () => panel.show()),
+    vscode.commands.registerCommand('antigravityChatGPT.openSettings', () => {
+      void panel.show().catch((error) => log.error('could not open the settings panel', error));
+    }),
 
     vscode.commands.registerCommand('antigravityChatGPT.enable', async () => {
       await ensureProxy();

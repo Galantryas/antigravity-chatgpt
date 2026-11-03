@@ -147,8 +147,12 @@ export class ProxyServer {
       await this.forward(id, ctx, res, started);
     } catch (error) {
       this.options.log.error(`[${id}] proxy error for ${shortUrl(url)}`, error);
-      if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { code: 502, message: 'proxy failure', status: 'INTERNAL' } }));
+      if (!res.headersSent) {
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: 502, message: 'proxy failure', status: 'INTERNAL' } }));
+      } else if (!res.writableEnded) {
+        res.end();
+      }
     }
   }
 
@@ -183,37 +187,52 @@ export class ProxyServer {
           const chunks: Buffer[] = [];
           let size = 0;
           upstreamRes.on('data', (chunk: Buffer) => {
-            if (!rewrite) res.write(chunk);
             size += chunk.length;
             if (rewrite || (this.options.captureDir && size < 2_000_000)) {
               if (size < 50_000_000) chunks.push(chunk);
             }
+            if (rewrite || res.writableEnded) return;
+            try {
+              res.write(chunk);
+            } catch {
+              // The IDE closed the stream between the check and the write.
+              request.destroy();
+            }
           });
           upstreamRes.on('end', () => {
-            if (rewrite && transformer) {
-              const original = Buffer.concat(chunks).toString('utf8');
-              let rewritten = original;
-              try {
-                rewritten = transformer.transform(original, ctx);
-              } catch (error) {
-                this.options.log.warn(`response transformer failed for ${shortUrl(ctx.url)}: ${(error as Error).message}`);
+            try {
+              if (rewrite && transformer) {
+                const original = Buffer.concat(chunks).toString('utf8');
+                let rewritten = original;
+                try {
+                  rewritten = transformer.transform(original, ctx);
+                } catch (error) {
+                  this.options.log.warn(`response transformer failed for ${shortUrl(ctx.url)}: ${(error as Error).message}`);
+                }
+                const payload = Buffer.from(rewritten, 'utf8');
+                const responseHeaders = { ...upstreamRes.headers };
+                delete responseHeaders['content-encoding'];
+                delete responseHeaders['transfer-encoding'];
+                responseHeaders['content-length'] = String(payload.length);
+                if (!res.writableEnded) {
+                  res.writeHead(upstreamRes.statusCode ?? 502, responseHeaders);
+                  res.end(payload);
+                }
+              } else if (!res.writableEnded) {
+                res.end();
               }
-              const payload = Buffer.from(rewritten, 'utf8');
-              const responseHeaders = { ...upstreamRes.headers };
-              delete responseHeaders['content-encoding'];
-              delete responseHeaders['transfer-encoding'];
-              responseHeaders['content-length'] = String(payload.length);
-              res.writeHead(upstreamRes.statusCode ?? 502, responseHeaders);
-              res.end(payload);
-            } else {
-              res.end();
+            } catch (error) {
+              this.options.log.error(`[${id}] could not finish the response`, error);
+              if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
+              if (!res.writableEnded) res.end();
+            } finally {
+              this.options.log.info(
+                `[${id}] ${upstreamRes.statusCode} ${shortUrl(ctx.url)} ${Date.now() - started}ms ` +
+                  `req=${ctx.body.length}B res=${size}B${rewrite ? ' (rewritten)' : ''}`,
+              );
+              this.capture(id, ctx, res, size, chunks);
+              resolve();
             }
-            this.options.log.info(
-              `[${id}] ${upstreamRes.statusCode} ${shortUrl(ctx.url)} ${Date.now() - started}ms ` +
-                `req=${ctx.body.length}B res=${size}B${rewrite ? ' (rewritten)' : ''}`,
-            );
-            this.capture(id, ctx, res, size, chunks);
-            resolve();
           });
         },
       );
@@ -221,8 +240,12 @@ export class ProxyServer {
       request.setTimeout(600_000, () => request.destroy(new Error('upstream timeout')));
       request.on('error', (error) => {
         this.options.log.error(`[${id}] upstream request failed`, error);
-        if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: { code: 502, message: error.message, status: 'UNAVAILABLE' } }));
+        if (!res.headersSent) {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { code: 502, message: error.message, status: 'UNAVAILABLE' } }));
+        } else if (!res.writableEnded) {
+          res.end();
+        }
         resolve();
       });
 

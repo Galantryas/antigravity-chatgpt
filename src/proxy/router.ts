@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ChatGptClient, ChatGptError } from '../chatgpt/client';
+import { AuthError, ChatGptClient, ChatGptError } from '../chatgpt/client';
 import { ModelEntry, ModelRegistry } from '../chatgpt/models';
 import { GeminiEnvelope, toChatRequest } from './translate/request';
 import { GeminiStreamTranslator, toGenerateContentResponse } from './translate/response';
@@ -51,6 +51,7 @@ export class ChatRouter {
     } catch (error) {
       this.counters.errors++;
       this.log.error(`generation via ${entry.modelId} failed`, error);
+      this.fail(ctx, error);
     }
     return true;
   }
@@ -78,22 +79,23 @@ export class ChatRouter {
     });
 
     const traceId = randomUUID().slice(0, 16);
-
-    if (!(await this.client.hasKey())) {
-      this.log.warn('ChatGPT session is not available; answering with an explanation instead of failing');
-      this.notice(ctx, traceId, MISSING_KEY_TEXT);
-      return;
-    }
-
-    if (!this.allowRequest()) {
-      this.log.warn('too many consecutive ChatGPT failures; suppressing this request');
-      this.notice(ctx, traceId, '**ChatGPT is failing repeatedly.** Check `Antigravity ChatGPT: Show log`.');
-      return;
-    }
-
     const translator = new GeminiStreamTranslator(traceId);
     let frames = 0;
+
     try {
+      const sessionProblem = await this.sessionProblem();
+      if (sessionProblem) {
+        this.log.warn('ChatGPT session is not available; answering with an explanation instead of failing');
+        this.notice(ctx, traceId, sessionProblem);
+        return;
+      }
+
+      if (!this.allowRequest()) {
+        this.log.warn('too many consecutive ChatGPT failures; suppressing this request');
+        this.notice(ctx, traceId, '**ChatGPT is failing repeatedly.** Check `Antigravity ChatGPT: Show log`.');
+        return;
+      }
+
       const chat = toChatRequest(envelope, entry);
       this.log.info(
         `${entry.modelId} ← ${envelope.requestType ?? 'agent'} request (${chat.messages.length} messages, ` +
@@ -107,18 +109,19 @@ export class ChatRouter {
         }
       }
       for (const frame of translator.finish()) res.write(frame);
-      res.end();
       this.log.info(`${entry.modelId} → ${frames} frames in ${Date.now() - started}ms`);
     } catch (error) {
       if (abort.signal.aborted) {
         this.log.info(`${entry.modelId} cancelled by the IDE after ${Date.now() - started}ms`);
-        res.end();
         return;
       }
       this.counters.errors++;
       this.recentFailures.push(Date.now());
       this.log.error(`${entry.modelId} failed after ${Date.now() - started}ms: ${(error as Error).message}`);
       this.notice(ctx, traceId, this.failureText(error));
+    } finally {
+      // Never leave the language server waiting for a stream that will not end.
+      if (!res.writableEnded) res.end();
     }
   }
 
@@ -143,14 +146,15 @@ export class ChatRouter {
       );
     };
 
-    if (!(await this.client.hasKey())) {
-      respond(MISSING_KEY_TEXT);
-      return;
-    }
-
     const translator = new GeminiStreamTranslator(traceId);
     const frames: string[] = [];
     try {
+      const sessionProblem = await this.sessionProblem();
+      if (sessionProblem) {
+        respond(sessionProblem);
+        return;
+      }
+
       const chat = toChatRequest(envelope, entry);
       for await (const chunk of this.client.streamChat(chat, abort.signal)) frames.push(...translator.push(chunk));
       frames.push(...translator.finish());
@@ -168,8 +172,42 @@ export class ChatRouter {
       this.counters.errors++;
       this.recentFailures.push(Date.now());
       this.log.error(`${entry.modelId} failed: ${(error as Error).message}`);
-      respond(this.failureText(error));
+      if (!res.headersSent) respond(this.failureText(error));
+    } finally {
+      if (!res.writableEnded) res.end();
     }
+  }
+
+  /** Human-readable reason when no usable session exists, or undefined. */
+  private async sessionProblem(): Promise<string | undefined> {
+    const state = await this.client.auth.status();
+    if (!state.signedIn) return MISSING_KEY_TEXT;
+    if (state.needsRefresh && !state.canRefresh) {
+      return (
+        '**ChatGPT sign-in has expired.** Run `Antigravity ChatGPT: Sign in with ChatGPT`, then send the message again. ' +
+        (state.error ? `(${state.error})` : '')
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * Last-resort guard for an unexpected throw after the headers were sent.
+   * Without it the response socket stays open and the IDE looks frozen.
+   */
+  private fail(ctx: ProxyContext, error: unknown): void {
+    const res = ctx.res;
+    if (res.writableEnded) return;
+    if (!res.headersSent) {
+      res.writeHead(502, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: { code: 502, message: this.failureText(error), status: 'INTERNAL' },
+        }),
+      );
+      return;
+    }
+    res.end();
   }
 
   /**
@@ -196,6 +234,12 @@ export class ChatRouter {
   }
 
   private failureText(error: unknown): string {
+    if (error instanceof AuthError) {
+      return (
+        '**ChatGPT sign-in failed or expired.** Run `Antigravity ChatGPT: Sign in with ChatGPT`, then send the message again. ' +
+        `(${error.message})`
+      );
+    }
     if (error instanceof ChatGptError) {
       switch (error.status) {
         case 401:

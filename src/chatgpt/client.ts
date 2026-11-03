@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { AuthError, CodexAuth } from './auth';
+import { AuthError, CodexAuth, LOGIN_HINT } from './auth';
 import { ChatMessage, ChatRequest, ProviderModelInfo, StreamChunk, Usage } from './types';
 
 const BASE = 'https://chatgpt.com/backend-api/codex';
@@ -44,8 +44,15 @@ export class ChatGptClient {
   }
 
   async hasKey(): Promise<boolean> {
-    const state = await this.auth.status();
-    return state.signedIn;
+    try {
+      const state = await this.auth.status();
+      // An expired session with no refresh token cannot answer a request; treat
+      // it like a missing key so the router explains the fix instead of
+      // starting a call that is guaranteed to fail.
+      return state.signedIn && !(state.needsRefresh && state.canRefresh === false);
+    } catch {
+      return false;
+    }
   }
 
   async listModels(): Promise<ProviderModelInfo[]> {
@@ -79,7 +86,10 @@ export class ChatGptClient {
   /** Cheap authenticated call used by the "check sign-in" command. */
   async validate(): Promise<{ ok: boolean; message: string }> {
     const state = await this.auth.status();
-    if (!state.signedIn) return { ok: false, message: `Not signed in. Run "codex login".` };
+    if (!state.signedIn) return { ok: false, message: state.error ?? `Not signed in. Run "${LOGIN_HINT}".` };
+    if (state.needsRefresh && state.canRefresh === false) {
+      return { ok: false, message: state.error ?? `Session expired. Run "${LOGIN_HINT}".` };
+    }
     try {
       await this.auth.get();
       const who = state.email ? `${state.email}${state.plan ? ` (${state.plan})` : ''}` : 'ChatGPT account';
@@ -242,7 +252,8 @@ function authHeaders(accessToken: string, accountId?: string): Record<string, st
   };
 }
 
-function errorMessage(status: number, body: string): string {  const trimmed = body.slice(0, 400);
+function errorMessage(status: number, body: string): string {
+  const trimmed = body.slice(0, 400);
   switch (status) {
     case 401:
       return `ChatGPT rejected the session (401). Run "codex login". ${trimmed}`;

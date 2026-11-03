@@ -57,3 +57,20 @@ test('round trip is stable', () => {
   assert.equal(once, twice);
   assert.equal(removeCloudCodeUrl(twice), base);
 });
+
+test('a UTF-8 BOM is removed instead of being written back', () => {
+  const before = `\uFEFF{\n  "jetski.cloudCodeUrl": "https://old.example"\n}\n`;
+  assert.equal(readCloudCodeUrl(before), 'https://old.example');
+
+  const after = setCloudCodeUrl(before, URL);
+  assert.equal(after.charCodeAt(0), '{'.charCodeAt(0));
+  assert.equal(readCloudCodeUrl(after), URL);
+  assert.doesNotThrow(() => JSON.parse(after));
+});
+
+test('removal also drops a UTF-8 BOM', () => {
+  const before = `\uFEFF{\n  "jetski.cloudCodeUrl": "${URL}"\n}\n`;
+  const after = removeCloudCodeUrl(before);
+  assert.equal(after.charCodeAt(0), '{'.charCodeAt(0));
+  assert.deepEqual(JSON.parse(after), {});
+});

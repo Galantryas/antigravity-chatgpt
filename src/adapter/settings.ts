@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Logger } from '../util/log';
-import { removeCloudCodeUrl, setCloudCodeUrl } from './settingsFile';
+import { readCloudCodeUrl, removeCloudCodeUrl, setCloudCodeUrl, stripBom } from './settingsFile';
 
 const SECTION = 'jetski';
 const KEY = 'cloudCodeUrl';
@@ -36,7 +36,17 @@ export class SettingsAdapter {
   }
 
   get current(): string | undefined {
-    return vscode.workspace.getConfiguration(SECTION).get<string>(KEY);
+    const configured = vscode.workspace.getConfiguration(SECTION).get<string>(KEY);
+    if (configured !== undefined) return configured;
+
+    // If the configuration service could not parse the file (a BOM is enough
+    // to break Antigravity's JSON.parse), read the value directly so restore
+    // still knows what the user had before we touched it.
+    try {
+      return readCloudCodeUrl(this.readFile());
+    } catch {
+      return undefined;
+    }
   }
 
   get path(): string {
@@ -49,9 +59,11 @@ export class SettingsAdapter {
 
   async apply(url: string): Promise<void> {
     const current = this.current;
+    // Always rewrite: this also strips a UTF-8 BOM that Antigravity's
+    // JSON.parse rejects, even when the value is already correct.
+    this.writeFile(url);
     if (current !== url) {
-      const previous = this.backup?.previous ?? (current === url ? undefined : current);
-      this.writeFile(url);
+      const previous = this.backup?.previous ?? current;
       await this.context.globalState.update(this.backupKey, { previous, applied: url, at: new Date().toISOString() });
       this.log.info(`${SECTION}.${KEY}: ${previous ?? '<unset>'} -> ${url}`);
     } else if (!this.backup) {
@@ -63,11 +75,33 @@ export class SettingsAdapter {
     }
   }
 
+  /**
+   * Removes a UTF-8 BOM without changing any setting. Antigravity's own JSON
+   * parsing fails on the BOM, which is enough to make sign-in and settings
+   * reads fail before this extension ever gets a chance to run.
+   */
+  normalize(): void {
+    try {
+      if (!existsSync(this.settingsPath)) return;
+      const text = readFileSync(this.settingsPath, 'utf8');
+      const clean = stripBom(text);
+      if (clean !== text) {
+        writeFileSync(this.settingsPath, clean, 'utf8');
+        this.log.info('removed a UTF-8 BOM from settings.json so Antigravity can parse it');
+      }
+    } catch (error) {
+      this.log.warn(`could not normalize settings.json: ${(error as Error).message}`);
+    }
+  }
+
   /** Removes our value and puts the user's original setting back. */
   async restore(): Promise<void> {
     const backup = this.backup;
     const current = this.current;
-    if (current === undefined) return;
+    if (current === undefined) {
+      this.normalize();
+      return;
+    }
 
     if (backup && current !== backup.applied) {
       this.log.warn(`${SECTION}.${KEY} was changed outside the extension (${current}); leaving it alone`);
@@ -88,11 +122,15 @@ export class SettingsAdapter {
    * configuration"). Editing settings.json directly works: the configuration
    * service watches the file and the main process reads the value live.
    */
+  private readFile(): string {
+    return existsSync(this.settingsPath) ? readFileSync(this.settingsPath, 'utf8') : '';
+  }
+
   private writeFile(value: string | undefined): void {
-    const text = existsSync(this.settingsPath) ? readFileSync(this.settingsPath, 'utf8') : '';
+    const text = this.readFile();
     const next = value === undefined ? removeCloudCodeUrl(text) : setCloudCodeUrl(text, value);
 
     mkdirSync(dirname(this.settingsPath), { recursive: true });
-    writeFileSync(this.settingsPath, next, 'utf8');
+    writeFileSync(this.settingsPath, stripBom(next), 'utf8');
   }
 }

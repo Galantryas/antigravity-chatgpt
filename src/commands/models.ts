@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ChatGptClient } from '../chatgpt/client';
-import { AUTH_FILE } from '../chatgpt/auth';
+import { AUTH_FILE, AuthState } from '../chatgpt/auth';
 import { CONFIG, ModelEntry, ModelRegistry, aliasForModelId } from '../chatgpt/models';
 import { Logger } from '../util/log';
 
@@ -28,34 +28,101 @@ export function registerModelCommands(deps: ModelCommandDeps): vscode.Disposable
     vscode.commands.registerCommand('antigravityChatGPT.signIn', async () => {
       const terminal = vscode.window.createTerminal({ name: 'Codex sign-in' });
       terminal.show();
+      const watch = watchLoginTerminal(terminal);
       terminal.sendText(codexCommand('login'), true);
 
-      const started = Date.now();
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: 'Waiting for ChatGPT sign-in in the browser…',
-          cancellable: true,
-        },
-        async (_progress, token) => {
-          while (Date.now() - started < SIGN_IN_TIMEOUT_MS && !token.isCancellationRequested) {
-            await delay(SIGN_IN_POLL_MS);
-            const state = await client.auth.status();
-            if (state.signedIn && !state.needsRefresh) {
-              const who = state.email ? `${state.email}${state.plan ? ` (${state.plan})` : ''}` : 'your ChatGPT account';
-              const action = await vscode.window.showInformationMessage(
-                `Signed in to ChatGPT as ${who}. Reload the window to use the models.`,
-                'Reload Window',
-              );
-              if (action === 'Reload Window') void vscode.commands.executeCommand('workbench.action.reloadWindow');
-              return;
+      let outcome: LoginOutcome = { ok: false, message: 'Sign-in did not start.' };
+      try {
+        outcome = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Waiting for ChatGPT sign-in in the browser…',
+            cancellable: true,
+          },
+          async (progress, token) => {
+            const started = Date.now();
+            while (Date.now() - started < SIGN_IN_TIMEOUT_MS && !token.isCancellationRequested) {
+              await delay(SIGN_IN_POLL_MS);
+              if (token.isCancellationRequested) break;
+
+              const state = await client.auth.status();
+
+              // A failed command is a failed login even if an older session
+              // still exists; the user asked to sign in again.
+              if (watch.state.ended && watch.state.code !== 0) {
+                return {
+                  ok: false,
+                  message:
+                    `codex login exited with code ${watch.state.code ?? 'unknown'}. ` +
+                    'Check the "Codex sign-in" terminal for details.',
+                };
+              }
+
+              if (state.signedIn && !state.needsRefresh) {
+                const check = await client.validate();
+                if (check.ok) return { ok: true, message: accountLabel(state) };
+
+                // Tokens exist but the backend rejected them. If codex has
+                // already exited, waiting longer cannot help.
+                if (watch.state.ended) return { ok: false, message: check.message };
+                progress.report({ message: 'Waiting for the session to become usable…' });
+                continue;
+              }
+
+              if (watch.state.ended) {
+                // codex exited cleanly. Give an expired-but-refreshable
+                // session one chance to renew before calling it a failure.
+                const check = await client.validate();
+                if (check.ok) return { ok: true, message: accountLabel(await client.auth.status()) };
+                return {
+                  ok: false,
+                  message: state.error ?? check.message ?? 'codex login finished without creating a session.',
+                };
+              }
+
+              if (watch.state.closed) {
+                return { ok: false, message: 'The sign-in terminal was closed before the login completed.' };
+              }
             }
-          }
-          void vscode.window.showWarningMessage(
-            `Sign-in was not detected. Finish the browser flow, then run "Antigravity ChatGPT: Check sign-in". Credentials: ${AUTH_FILE}`,
-          );
-        },
+
+            if (token.isCancellationRequested) return { ok: false, cancelled: true, message: 'Sign-in cancelled.' };
+            return {
+              ok: false,
+              message:
+                'Sign-in was not detected. If the browser flow is still open, finish it and run ' +
+                `"Antigravity ChatGPT: Check sign-in". Credentials: ${AUTH_FILE}`,
+            };
+          },
+        );
+      } catch (error) {
+        outcome = { ok: false, message: `Unexpected sign-in error: ${(error as Error).message}` };
+      } finally {
+        watch.dispose();
+      }
+
+      if (outcome.ok) {
+        log.info(outcome.message);
+        const action = await vscode.window.showInformationMessage(
+          `${outcome.message}. Reload the window to use the models.`,
+          'Reload Window',
+        );
+        if (action === 'Reload Window') void vscode.commands.executeCommand('workbench.action.reloadWindow');
+        return;
+      }
+
+      if (outcome.cancelled) {
+        log.info(outcome.message);
+        return;
+      }
+
+      log.warn(`ChatGPT sign-in failed: ${outcome.message}`);
+      const action = await vscode.window.showErrorMessage(
+        `ChatGPT sign-in failed: ${outcome.message}`,
+        'Show log',
+        'Retry',
       );
+      if (action === 'Show log') log.show();
+      else if (action === 'Retry') void vscode.commands.executeCommand('antigravityChatGPT.signIn');
     }),
 
     vscode.commands.registerCommand('antigravityChatGPT.signOut', async () => {
@@ -170,6 +237,54 @@ export function registerModelCommands(deps: ModelCommandDeps): vscode.Disposable
       if (picked) log.show();
     }),
   ];
+}
+
+function accountLabel(state: AuthState): string {
+  return state.email
+    ? `Signed in to ChatGPT as ${state.email}${state.plan ? ` (${state.plan})` : ''}`
+    : 'Signed in to ChatGPT';
+}
+
+interface LoginOutcome {
+  ok: boolean;
+  cancelled?: boolean;
+  message: string;
+}
+
+interface LoginWatch {
+  state: { ended: boolean; code?: number; closed: boolean };
+  dispose: () => void;
+}
+
+/**
+ * Watches the sign-in terminal so a failed `codex login` is reported
+ * immediately instead of polling for ten minutes. Shell integration is
+ * optional; when it is unavailable the auth polling and the terminal-close
+ * event still cover the common failure modes.
+ */
+function watchLoginTerminal(terminal: vscode.Terminal): LoginWatch {
+  const state: LoginWatch['state'] = { ended: false, code: undefined, closed: false };
+  const disposables: vscode.Disposable[] = [];
+
+  const onEnd = vscode.window.onDidEndTerminalShellExecution;
+  if (typeof onEnd === 'function') {
+    disposables.push(
+      onEnd((event) => {
+        if (event.terminal !== terminal) return;
+        if (!/login/i.test(event.execution.commandLine.value)) return;
+        state.ended = true;
+        state.code = event.exitCode;
+      }),
+    );
+  }
+
+  disposables.push(
+    vscode.window.onDidCloseTerminal((closed) => {
+      if (closed === terminal) state.closed = true;
+    }),
+  );
+
+  return { state, dispose: () => disposables.forEach((item) => item.dispose()) };
 }
 
 function codexCommand(subcommand: string): string {

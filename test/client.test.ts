@@ -29,6 +29,36 @@ const request: ChatRequest = {
   tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: {} } } }],
 };
 
+test('hasKey rejects an expired session that cannot be refreshed', async () => {
+  const client = new ChatGptClient({
+    status: async () => ({ signedIn: true, needsRefresh: true, canRefresh: false }),
+  } as never);
+  assert.equal(await client.hasKey(), false);
+});
+
+test('validate explains an expired session without a refresh token', async () => {
+  const client = new ChatGptClient({
+    status: async () => ({
+      signedIn: true,
+      needsRefresh: true,
+      canRefresh: false,
+      error: 'refresh token missing; run "codex login" again',
+    }),
+  } as never);
+  const result = await client.validate();
+  assert.equal(result.ok, false);
+  assert.match(result.message, /refresh token missing/);
+});
+
+test('hasKey survives an auth status that throws', async () => {
+  const client = new ChatGptClient({
+    status: async () => {
+      throw new Error('boom');
+    },
+  } as never);
+  assert.equal(await client.hasKey(), false);
+});
+
 test('responses SSE becomes chat chunks with text, tool call and usage', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = (async () =>
